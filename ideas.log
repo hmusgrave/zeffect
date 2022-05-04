@@ -1,0 +1,118 @@
+In the interest of keeping goal posts well defined, any Turing-complete
+language can easily represent algebraic effect handlers by means of
+implementing an interpreter for their favorite language, but by "implementing
+AEH for Zig," we mean creating a library which feels "Ziggish." The burden of
+adopting an AEH library into an existing Zig project should be minimal, and
+most of the benefits of AEH should be realized.
+
+In no particular order, those benefits are:
+- Composability of effects, spawning those effects, and handling those effects
+  across arbitrary effect types,
+- Low/Zero runtime overhead compared to the strategies being replaced
+  (exceptions, iterators, async/await, parser combinators, logging, ...),
+- Effects being appropriately type-checked so that all effects are handled, and
+- Explicit boilerplate in wiring context down to where it's used being
+  obviated.
+
+IMO, cheap composability is the main benefit. As we'll show in a moment,
+type-checking is antithetical with boilerplate avoidance in Zig.
+
+Strategy:
+
+(1) Something reminiscent of jumping stack frames is mandatory to mix effects
+in this system with effects of external code (like printf). Other languages
+(Python) have libraries which accumulate global state and still go through the
+ordinary function return path, but doing so exposes order-inconsistencies
+between effects we do and do not control and makes certain kinds of
+"resumptions" impossible.
+
+(2) A "full-featured" AEH system enables actions such as multiple resumption,
+and handling those explicitly requires additional stack frames of some sort.
+
+(3) Zig lacks sufficient metaprogramming hooks to enable such features without
+explicitly hopping around the stack.
+
+(4) The only language-blessed (i.e., not some sort of hacky manual ASM memory
+modification) way to jump across the stack is with async/await and
+suspend/resume.
+
+(5) Consequently, we must assume that at least part of our solution makes use
+of those features. Since those features also suffice to implement a full AEH
+system, a first pass can start with (ab)use of suspend/resume for everything
+and add more efficient alternatives where possible later.
+
+(6) Suppose we have some function which triggers an effect and that we want to
+capture such an event in the type system. Either the type is captured in
+something other than that function's type, the type is captured in the
+function's inputs, or it's captured in the return value (values? if we count
+errors separately).
+
+(6a) Capturing the type elsewhere seems error-prone since function pointers can
+be saved wherever and aren't required to retain appropriate references to such
+a system.
+
+(6b) Capturing the type in the return value is annoying at best since it
+requires a manual unpacking and is easy to ignore. Adding it to the error
+values is interesting since the language doesn't allow those to be ignored and
+since those already type-check appropriately as some kind of set type. A little
+boilerplate at every call-site would be required to expunge phony errors, and
+every intermediate function would have to be _explicitly_ marked, but overhead
+would be moderately low.
+
+(6c) Capturing the type in an input is conceptually nice because you can't
+forget to supply a function's input. This would _probably_ allow for slightly
+less boilerplate than fiddling with phony error types (and be ...more...
+Ziggish), but it still requires explicitly passing types around the call stack,
+obviating one of the main benefits of AEH -- the ability to avoid explicitly
+stringing contexts through the call stack.
+
+(7) Rather than allowing for all the code blocks in question to be type-checked
+at compile-time, configuring a default handler for underspecified effects (much
+how the language implements a default panic handler) and trapping those at
+runtime is probably a bit more in the spirit of the language. It's a hookable,
+safety-checked behavior that places minimal burden on the programmer and still
+allows itself to be mostly proven correct in the presence of a sufficient test
+suite. Given how low the benfit is of ensuring every effect is handled (and
+potentially even wanting to explicitly ignore some), leaving out explicit type
+signatures is probably for the best.
+
+(8) In Koka (linked), the handler specifies which effects it handles (and how
+it handles them), and it additionally admits a "return" statement which allows
+the handled action's initial return to be modified. This is _exactly_
+equivalent to passing in an action which applies that "return" statement, and
+given the small additional amount of boilerplate required to pass a lambda in
+Zig (this probably ought to be some kind of comptime thing), I don't think any
+time will be saved by a significant number of programmers by including a
+"return" statement in the handlers, so we can avoid it.
+
+(9) The moving pieces then are (a) handlers which specify which effects they
+handle and how, (b) effect descriptions (types), (c) actions which produce
+effects, and (d) code which applies handlers to actions.
+
+(10) Given how much of this is likely to be comptime anyway, I'm not sure we'll
+get as much benefit out of splitting those out in Zig as we would in something
+like Koka. One sort of thing we're emulating is try/effect for example, and I
+don't often see people writing handlers which blindly apply the same try/effect
+logic to different actions.
+
+(11) That does happen occasionally, and I _definitely_ see that sort of pattern
+for other kinds of effects (yield from a map applied to an iterator), so
+thinking back on it, maybe our initial pass at the problem _should_ actually
+split out those different parts and only join them back if it seems unwieldy in
+a few practice applications or as syntactic sugar.
+
+(12) In Koka, both multiple resumptions and not resuming are allowed. In Zig
+that's a huge problem. The language's error handling features rely on suspends
+being matched by resumes (i.e., anything that looks like a traditional
+language's throw/catch is antithetical to Ziggish code), so not resuming at all
+is dangerous unless explicitly designed around (maybe most of the time, the
+effect producer could explicitly return here and have about the right behavior?
+especially if they return a special error type so that errdefer and whatnot in
+the calling stack frames would be triggered? AEH has updated papers describing
+finalization steps which handlers can include that look kind of like
+cancellation tokens, but I'm not sure how we would thread those through
+arbitrary stack frames in Zig). Also, multiple resumptions are only kind of
+safeish for nice code and only if we clone async stack frames to resume. It
+might be useful in certain isolated pieces of code, but I doubt we can make
+that bulletproof if we choose to implement it (and implementing it greatly
+increases the Zig code complexity since nothing necessarily tail-calls anymore).
