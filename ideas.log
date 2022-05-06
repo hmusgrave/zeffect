@@ -116,3 +116,38 @@ safeish for nice code and only if we clone async stack frames to resume. It
 might be useful in certain isolated pieces of code, but I doubt we can make
 that bulletproof if we choose to implement it (and implementing it greatly
 increases the Zig code complexity since nothing necessarily tail-calls anymore).
+
+(13) (2022-05-06) I think as a first pass at this we're going to:
+
++ Separate handlers, effects, and the things they're handling. This is what
+other AEH systems provide, and on the surface it both seems potentially
+beneficial for some code reuse and not necessarily any more complicated to
+build/use.
+
++ Design some sort of AEH context so that nesting and shadowing the same
+handler type multiple times works out of the box if somebody just holds a
+global instance.
+
++ Not use return statements.
+
++ Do allow for multiple handlers (functions) to be specified at once in the
+same "handler" type.
+
++ Assume all function inputs are comptime-known to significantly improve
+performance and code complexity.
+
++ Explicitly use suspend/resume extensively for the implementation.
+
++ Disallow not resuming (we should return a special error instead so that
+errdefer and other cleanup code execute -- this does execute some extra stack
+frames, but those frames will probably only do exactly the cleanup we'd like
+them to).
+
++ Disallow multiple resumption (we can ammend this later, but figuring out how
+to get this working in the easy case is probably more beneficial than doing
+something that explicitly requires storing stack frames).
+
++ Since we're only resuming once, it's trivial to pass return pointers around.
+For the first implementation let's also assume those can be tail-called so that
+we don't have to store extra stack frames anywhere. (TODO) This can be the
+first extra feature we add after v0.
