@@ -151,3 +151,15 @@ something that explicitly requires storing stack frames).
 For the first implementation let's also assume those can be tail-called so that
 we don't have to store extra stack frames anywhere. (TODO) This can be the
 first extra feature we add after v0.
+
+(14) (2022-05-10) Suppose we always resume exactly once. This is equivalent to
+just providing a hook for people to call. The only value of the effect system
+at that point becomes a way to inject context. Moreover, the limitations of
+non-unit resumption counts are somewhat fundamental to the idea -- without
+resuming there's no way to hook into `defer` and `errdefer` statements, and
+resuming twice can't be compile-time checked to verify that double allocations,
+recursion, and all tha tother nonsense is safe.
+
+In that vein then, if this project is going to have much use a reasonable
+rebrand would be to provide call contexts. That's still valuable in its own
+right, but it's a much simpler problem to fully solve.
